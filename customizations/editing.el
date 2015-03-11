@@ -43,6 +43,8 @@
                                                "backups"))))
 (setq auto-save-default nil)
 
+;; Allows deleting a selection when you start typing.
+(delete-selection-mode 1)
 
 ;; comments
 (defun toggle-comment-on-line ()
@@ -69,4 +71,4 @@
       (ns-get-selection-internal 'CLIPBOARD)
     (quit nil)))
 
-(setq electric-indent-mode nil)
+(setq electric-indent-mode 1)
