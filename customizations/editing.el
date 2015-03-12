@@ -72,3 +72,6 @@
     (quit nil)))
 
 (setq electric-indent-mode 1)
+
+(require 'yasnippet)
+(yas/global-mode 1)

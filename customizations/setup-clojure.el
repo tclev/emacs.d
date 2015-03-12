@@ -80,3 +80,9 @@
      (define-key clojure-mode-map (kbd "C-M-r") 'cider-refresh)
      (define-key clojure-mode-map (kbd "C-c u") 'cider-user-ns)
      (define-key cider-mode-map (kbd "C-c u") 'cider-user-ns)))
+
+(require 'clj-refactor)
+(add-hook 'clojure-mode-hook (lambda ()
+                               (clj-refactor-mode 1)
+                               ;; insert keybinding setup here
+                               (cljr-add-keybindings-with-prefix "C-c C-m")))
