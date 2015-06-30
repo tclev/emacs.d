@@ -154,4 +154,5 @@
  '(company-scrollbar-fg ((t (:background "#4b4b4b"))))
  '(company-tooltip ((t (:inherit default :background "#444444"))))
  '(company-tooltip-common ((t (:inherit font-lock-constant-face))))
- '(company-tooltip-selection ((t (:inherit font-lock-function-name-face)))))
+ '(company-tooltip-selection ((t (:inherit font-lock-function-name-face))))
+ '(show-paren-match ((t (:background "#3f3f3f" :foreground "#7cb8bb" :underline t :weight extra-bold)))))

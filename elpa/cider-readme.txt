@@ -1,4 +1,5 @@
-Provides a Clojure IDE and REPL for Emacs, built on top of nREPL.
+Provides a Clojure interactive development environment for Emacs, built on
+top of nREPL.
 
 Installation:
 

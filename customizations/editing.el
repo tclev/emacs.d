@@ -72,6 +72,10 @@
     (quit nil)))
 
 (setq electric-indent-mode 1)
+(global-aggressive-indent-mode 1)
+(add-to-list 'aggressive-indent-excluded-modes 'html-mode)
 
 (require 'yasnippet)
 (yas/global-mode 1)
+
+
