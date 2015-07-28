@@ -631,7 +631,7 @@ When invoked with a prefix ARG the command doesn't prompt for confirmation."
   "Return the sexp preceding the point."
   (buffer-substring-no-properties
    (save-excursion
-     (backward-sexp)
+     (clojure-backward-logical-sexp 1)
      (point))
    (point)))
 
@@ -773,9 +773,12 @@ not found."
 
 (defun cider-jump-to (buffer &optional pos other-window)
   "Push current point onto marker ring, and jump to BUFFER and POS.
-POS can be either a numeric position in BUFFER or a cons (LINE . COLUMN)
-where COLUMN can be nil. If OTHER-WINDOW is non-nil don't reuse current
-window."
+POS can be either a number, a cons, or a symbol.
+If a number, it is the character position (the point).
+If a cons, it specifies the position as (LINE . COLUMN). COLUMN can be nil.
+If a symbol, `cider-jump-to' searches for something that looks like the
+symbol's definition in the file.
+If OTHER-WINDOW is non-nil don't reuse current window."
   (ring-insert find-tag-marker-ring (point-marker))
   (if other-window
       (pop-to-buffer buffer)
@@ -785,14 +788,33 @@ window."
     (widen)
     (goto-char (point-min))
     (cider-mode +1)
-    (if (consp pos)
-        (progn
-          (forward-line (1- (or (car pos) 1)))
-          (if (cdr pos)
-              (move-to-column (cdr pos))
-            (back-to-indentation)))
-      (when pos
-        (goto-char pos)))))
+    (cond
+     ;; Line-column specification.
+     ((consp pos)
+      (forward-line (1- (or (car pos) 1)))
+      (if (cdr pos)
+          (move-to-column (cdr pos))
+        (back-to-indentation)))
+     ;; Point specification.
+     ((numberp pos)
+      (goto-char pos))
+     ;; Symbol or string.
+     (pos
+      ;; Try to find (def full-name ...).
+      (if (or (save-excursion
+                (search-forward-regexp (format "(def.*\\s-\\(%s\\)" (regexp-quote pos))
+                                       nil 'noerror))
+              (let ((name (replace-regexp-in-string ".*/" "" pos)))
+                ;; Try to find (def name ...).
+                (or (save-excursion
+                      (search-forward-regexp (format "(def.*\\s-\\(%s\\)" (regexp-quote name))
+                                             nil 'noerror))
+                    ;; Last resort, just find the first occurrence of `name'.
+                    (save-excursion
+                      (search-forward name nil 'noerror)))))
+          (goto-char (match-beginning 0))
+        (message "Can't find %s in %s" pos (buffer-file-name))))
+     (t nil))))
 
 (defun cider-find-dwim-other-window (symbol-file)
   "Jump to SYMBOL-FILE at point, place results in other window."
@@ -905,11 +927,12 @@ INFO object is returned by `cider-var-info' or `cider-member-info'.
 OTHER-WINDOW is passed to `cider-jamp-to'."
   (let* ((line (nrepl-dict-get info "line"))
          (file (nrepl-dict-get info "file"))
+         (name (nrepl-dict-get info "name"))
          (buffer (and file
                       (not (cider--tooling-file-p file))
                       (cider-find-file file))))
     (if buffer
-        (cider-jump-to buffer (cons line nil) other-window)
+        (cider-jump-to buffer (if line (cons line nil) name) other-window)
       (error "No source location"))))
 
 (defun cider--find-var-other-window (var &optional line)
@@ -1549,7 +1572,8 @@ and automatically removed when killed."
     (when ancillary
       (add-to-list 'cider-ancillary-buffers name)
       (add-hook 'kill-buffer-hook
-                (lambda () (setq cider-ancillary-buffers (remove name cider-ancillary-buffers)))))
+                (lambda () (setq cider-ancillary-buffers (remove name cider-ancillary-buffers)))
+                nil 'local))
     (current-buffer)))
 
 (defun cider-emit-into-popup-buffer (buffer value)
@@ -1640,21 +1664,30 @@ Clears any compilation highlights and kills the error window."
       (cider-eval-ns-form)
       (cider--cache-ns-form))))
 
+(defvar-local cider-interactive-eval-override nil
+  "Function to call instead of `cider-interactive-eval'.")
+
 (defun cider-interactive-eval (form &optional callback point)
   "Evaluate FORM and dispatch the response to CALLBACK.
 This function is the main entry point in CIDER's interactive evaluation
 API.  Most other interactive eval functions should rely on this function.
 If CALLBACK is nil use `cider-interactive-eval-handler'.
-POINT, if non-nil, is the position of FORM in its buffer."
-  (cider--prep-interactive-eval form)
-  (nrepl-request:eval
-   form
-   (or callback (cider-interactive-eval-handler))
-   ;; always eval ns forms in the user namespace
-   ;; otherwise trying to eval ns form for the first time will produce an error
-   (if (cider-ns-form-p form) "user" (cider-current-ns))
-   nil
-   point))
+POINT, if non-nil, is the position of FORM in its buffer.
+
+If `cider-interactive-eval-override' is a function, call it with the same
+arguments and only proceed with evaluation if it returns nil."
+  (unless (and cider-interactive-eval-override
+               (functionp cider-interactive-eval-override)
+               (funcall cider-interactive-eval-override form callback point))
+    (cider--prep-interactive-eval form)
+    (nrepl-request:eval
+     form
+     (or callback (cider-interactive-eval-handler))
+     ;; always eval ns forms in the user namespace
+     ;; otherwise trying to eval ns form for the first time will produce an error
+     (if (cider-ns-form-p form) "user" (cider-current-ns))
+     nil
+     point)))
 
 (defun cider-interactive-pprint-eval (form &optional callback right-margin)
   "Evaluate FORM and dispatch the response to CALLBACK.
@@ -1683,7 +1716,7 @@ If invoked with a PREFIX argument, print the result in the current buffer."
   (interactive "P")
   (cider-interactive-eval (cider-last-sexp)
                           (when prefix (cider-eval-print-handler))
-                          (save-excursion (backward-sexp 1) (point))))
+                          (save-excursion (clojure-backward-logical-sexp 1) (point))))
 
 (defun cider-eval-last-sexp-and-replace ()
   "Evaluate the expression preceding point and replace it with its result."
@@ -1752,6 +1785,7 @@ command `cider-debug-defun-at-point'."
   "Read a sexp from the minibuffer and output its result to the echo area."
   (interactive)
   (let* ((form (cider-read-from-minibuffer "CIDER Eval: "))
+         (override cider-interactive-eval-override)
          (ns-form (if (cider-ns-form-p form) "" (format "(ns %s)" (cider-current-ns)))))
     (with-current-buffer (get-buffer-create cider-read-eval-buffer)
       (erase-buffer)
@@ -1759,7 +1793,8 @@ command `cider-debug-defun-at-point'."
       (unless (string= "" ns-form)
         (insert ns-form "\n\n"))
       (insert form)
-      (cider-interactive-eval form))))
+      (let ((cider-interactive-eval-override override))
+        (cider-interactive-eval form)))))
 
 
 ;; Connection and REPL
@@ -1986,7 +2021,10 @@ unconditionally."
                                 (if (buffer-file-name)
                                     (file-name-nondirectory
                                      (buffer-file-name))))))
-  (cider--clear-compilation-highlights)
+  (-when-let (buf (find-buffer-visiting filename))
+    (with-current-buffer buf
+      (remove-overlays nil nil 'cider-type 'instrumented-defs)
+      (cider--clear-compilation-highlights)))
   (cider--quit-error-window)
   (cider--cache-ns-form)
   (cider-request:load-file
@@ -2129,40 +2167,82 @@ the string contents of the region into a formatted string."
   (dolist (buf-name cider-ancillary-buffers)
     (cider--close-buffer buf-name)))
 
-(defun cider-quit (&optional arg)
-  "Quit CIDER.
-
-With a prefix ARG the command won't ask for confirmation.
-Quitting closes all active nREPL connections and kills all CIDER buffers."
-  (interactive "P")
-  (when (or arg (y-or-n-p "Are you sure you want to quit CIDER? "))
-    (dolist (connection nrepl-connection-list)
-      (when connection
-        (nrepl-close connection)))
-    (message "All active nREPL connections were closed")
-    (cider-close-ancillary-buffers)
-    ;; clean the cached ns forms in all Clojure buffers
-    ;; as we don't track which buffer is associated with
-    ;; which connection we simply clean the cache for all buffers
+(defun cider--quit-connection (conn)
+  "Quit the connection CONN."
+  (when conn
+    (nrepl-close conn)
+    ;; clean the cached ns forms for this connection in all Clojure buffers
     (dolist (clojure-buffer (cider-util--clojure-buffers))
       (with-current-buffer clojure-buffer
-        (setq cider--ns-form-cache (make-hash-table :test 'equal))))))
+        (remhash conn cider--ns-form-cache)))))
 
-(defun cider-restart (&optional prompt-project)
-  "Quit CIDER and restart it.
-If PROMPT-PROJECT is t, then prompt for the project in which to
-restart the server."
+(defun cider-quit (&optional quit-all)
+  "Quit the currently active CIDER connection.
+
+With a prefix argument QUIT-ALL the command will kill all connections
+and all ancillary CIDER buffers."
   (interactive "P")
-  (let ((project-dir (with-current-buffer (nrepl-current-connection-buffer) nrepl-project-dir)))
-    (cider-quit)
+  (when (y-or-n-p "Are you sure you want to quit the current CIDER connection? ")
+    (if quit-all
+        (progn
+          (dolist (connection nrepl-connection-list)
+            (cider--quit-connection connection))
+          (message "All active nREPL connections were closed"))
+      (cider--quit-connection (nrepl-current-connection-buffer)))
+    ;; if there are no more connections we can kill all ancillary buffers
+    (unless (cider-connected-p)
+      (cider-close-ancillary-buffers))))
+
+(defun cider--restart-connection (conn)
+  "Restart the connection CONN."
+  (let ((project-dir (with-current-buffer conn nrepl-project-dir)))
+    (cider--quit-connection conn)
     ;; Workaround for a nasty race condition https://github.com/clojure-emacs/cider/issues/439
     ;; TODO: Find a better way to ensure `cider-quit' has finished
     (message "Waiting for CIDER to quit...")
     (sleep-for 2)
     (if project-dir
         (let ((default-directory project-dir))
-          (cider-jack-in prompt-project))
+          (cider-jack-in))
       (error "Can't restart CIDER for unknown project"))))
+
+(defun cider-restart (&optional restart-all)
+  "Restart the currently active CIDER connection.
+If RESTART-ALL is t, then restarts all connections."
+  (interactive "P")
+  (if restart-all
+      (dolist (conn nrepl-connection-list)
+        (cider--restart-connection conn))
+    (cider--restart-connection (nrepl-current-connection-buffer))))
+
+(defvar cider--namespace-history nil
+  "History of user input for namespace prompts.")
+
+(defun cider--var-namespace (var)
+  "Return the namespace of VAR.
+VAR is a fully qualified Clojure variable name as a string."
+  (replace-regexp-in-string "\\(?:#'\\)?\\(.*\\)/.*" "\\1" var))
+
+(defun cider-run (&optional function)
+  "Run -main or FUNCTION, prompting for its namespace if necessary.
+With a prefix argument, prompt for function to run instead of -main."
+  (interactive (list (when current-prefix-arg (read-string "Function name: "))))
+  (let ((name (or function "-main")))
+    (-when-let (response (nrepl-send-sync-request
+                          (list "op" "ns-list-vars-by-name" "name" name)))
+      (-if-let (vars (split-string (substring (nrepl-dict-get response "var-list") 1 -1)))
+          (cider-interactive-eval
+           (if (= (length vars) 1)
+               (concat "(" (car vars) ")")
+             (let* ((completions (mapcar #'cider--var-namespace vars))
+                    (def (or (car cider--namespace-history)
+                             (car completions))))
+               (format "(#'%s/%s)"
+                       (completing-read (format "Namespace (%s): " def)
+                                        completions nil t nil
+                                        'cider--namespace-history def)
+                       name))))
+        (user-error "No %s var defined in any namespace" name)))))
 
 (provide 'cider-interaction)
 
