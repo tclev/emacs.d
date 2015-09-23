@@ -9,6 +9,10 @@
      (tagedit-add-paredit-like-keybindings)
      (add-hook 'html-mode-hook (lambda () (tagedit-mode 1)))))
 
+(add-hook 'js-mode-hook
+          (lambda ()
+            (setq indent-tabs-mode t)
+            (setq tab-width 2)))
 
 ;; coffeescript
 (add-to-list 'auto-mode-alist '("\\.coffee.erb$" . coffee-mode))
